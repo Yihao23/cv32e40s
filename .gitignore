@@ -1,3 +1,9 @@
 TAGS
 *.swp
 *~
+*.vcd
+*.log
+*.hex
+*.elf
+*.bin
+obj_dir/
