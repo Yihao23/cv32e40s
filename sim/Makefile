@@ -18,7 +18,7 @@ TB        := tb_top.sv
 CPP       := sim_main.cpp
 TOP       := tb_top
 
-VFLAGS    := --cc --exe --trace --top-module $(TOP) \
+VFLAGS    := --sv --cc --exe --trace --top-module $(TOP) \
              -Wno-fatal -Wno-BLKANDNBLK \
              +define+COREV_ASSERT_OFF \
              -I$(INC_DIR)

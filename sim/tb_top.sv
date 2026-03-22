@@ -33,8 +33,12 @@ module tb_top (
   localparam MEM_WORDS = MEM_SIZE / 4;
   localparam MEM_BASE  = 32'h8000_0000;
   localparam MEM_MASK  = MEM_SIZE - 1;
+  localparam TOHOST_ADDR = 32'h8000_1000;
 
   logic [31:0] mem [0:MEM_WORDS-1];
+  integer cycle_count;
+  logic [31:0] last_pc;
+  logic done;
 
   initial begin
     $readmemh("firmware.hex", mem);
@@ -63,6 +67,20 @@ module tb_top (
 
   assign instr_rvalid = instr_rvalid_q;
   assign instr_rdata  = instr_rdata_q;
+
+  // Track a simple "PC" based on the last instruction fetch address.
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      cycle_count <= 0;
+      last_pc <= MEM_BASE;
+      done <= 1'b0;
+    end else begin
+      cycle_count <= cycle_count + 1;
+      if (instr_req & instr_gnt) begin
+        last_pc <= instr_addr;
+      end
+    end
+  end
 
   // ---------------------------------------------------------------
   // Data OBI responder (1-cycle grant, 1-cycle response)
@@ -108,6 +126,15 @@ module tb_top (
       if (data_be_q[1]) mem[data_word_addr][15: 8] <= data_wdata_q[15: 8];
       if (data_be_q[2]) mem[data_word_addr][23:16] <= data_wdata_q[23:16];
       if (data_be_q[3]) mem[data_word_addr][31:24] <= data_wdata_q[31:24];
+
+      if (!done && data_addr_q == TOHOST_ADDR) begin
+        done <= 1'b1;
+        $display("RESULT_SIM %0d", data_wdata_q);
+        $display("PC_VALID 1");
+        $display("PC_VALUE %032b", last_pc);
+        $display("NUM_CYCLES %0d", cycle_count);
+        $finish;
+      end
     end
   end
 
