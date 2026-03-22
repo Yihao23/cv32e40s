@@ -27,7 +27,7 @@ CELLIFT_DPI_CPP := \
 CPP       := sim_main.cpp $(CELLIFT_DPI_CPP)
 TOP       := tb_top
 
-VFLAGS    := --cc --exe --trace --top-module $(TOP) \
+VFLAGS    := --sv --cc --exe --trace --top-module $(TOP) \
              -Wno-fatal -Wno-BLKANDNBLK \
              +define+COREV_ASSERT_OFF \
              -I$(INC_DIR)
