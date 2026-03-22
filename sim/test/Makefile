@@ -6,11 +6,11 @@ OBJDUMP  = $(PREFIX)objdump
 CFLAGS  := -march=rv32im -mabi=ilp32 -nostdlib -nostartfiles -T link.ld
 
 TARGET  := firmware
-SRC     := test.S
+SRC     := /work/import_from_hw_sw_fuzzer/input_0_a.pp.S
 
 .PHONY: all clean
 
-all: $(TARGET).hex
+all: $(TARGET).hex $(TARGET).dump
 
 $(TARGET).elf: $(SRC) link.ld
 	$(CC) $(CFLAGS) -o $@ $(SRC)
@@ -28,7 +28,9 @@ f = open('$@','w'); \
 f.close()"
 
 $(TARGET).dump: $(TARGET).elf
-	$(OBJDUMP) -d $< > $@
+	$(OBJDUMP) --disassemble-all \
+	--disassemble-zeroes \
+	-M no-aliases,numeric $< > $@
 
 clean:
 	rm -f $(TARGET).elf $(TARGET).bin $(TARGET).hex $(TARGET).dump
