@@ -27,17 +27,117 @@ module tb_top (
   logic fencei_flush_ack;
 
   // ---------------------------------------------------------------
-  // Unified memory: 256KB at 0x80000000
+  // Unified memory: 1MB at 0x80000000
   // ---------------------------------------------------------------
-  localparam MEM_SIZE  = 256 * 1024;  // bytes
+  localparam MEM_SIZE  = 1 * 1024 * 1024;  // bytes
   localparam MEM_WORDS = MEM_SIZE / 4;
   localparam MEM_BASE  = 32'h8000_0000;
   localparam MEM_MASK  = MEM_SIZE - 1;
 
   logic [31:0] mem [0:MEM_WORDS-1];
 
-  initial begin
-    $readmemh("firmware.hex", mem);
+  // Shadow taint memory (single label: t0). This file only preloads initial taints.
+  // Propagating taints on stores requires connecting the instrumented core's *_t0 ports.
+  logic [31:0] mem_t0 [0:MEM_WORDS-1];
+
+  // ---------------------------------------------------------------
+  // DPI ELF + taint preloading (bus-agnostic, writes mem[] directly)
+  // ---------------------------------------------------------------
+  import "DPI-C" function void read_elf(input string filename);
+  import "DPI-C" function byte get_section(output longint address, output longint len);
+  import "DPI-C" context function byte read_section(input longint address, inout byte buffer[]);
+
+  import "DPI-C" function void init_taint_vectors(input longint num_taints);
+  import "DPI-C" function void read_taints(input string filename);
+  import "DPI-C" function byte get_taint_section(input longint taint_id, output longint address, output longint len);
+  import "DPI-C" context function byte read_taint_section(input longint taint_id, input longint address, inout byte buffer[]);
+
+  import "DPI-C" function string Get_SRAM_ELF_object_filename();
+  import "DPI-C" function string Get_SRAM_TaintsPath();
+
+  function automatic int unsigned mem_word_index(input longint byte_addr);
+    longint off;
+    begin
+      off = (byte_addr - longint'(MEM_BASE)) & longint'(MEM_MASK);
+      mem_word_index = int'(off >> 2);
+    end
+  endfunction
+
+  function automatic logic [31:0] pack_le32(input byte b0, input byte b1, input byte b2, input byte b3);
+    pack_le32 = {b3, b2, b1, b0};
+  endfunction
+
+  initial begin : preload_init
+    for (int i = 0; i < MEM_WORDS; i++) begin
+      mem[i] <= '0;
+      mem_t0[i] <= '0;
+    end
+
+    // ELF preload (requires SIMSRAMELF to be set; see common_functions.cc)
+    begin : preload_elf
+      string elf_file;
+      longint section_addr, section_len;
+      byte buffer[];
+      int unsigned num_words;
+
+      elf_file = Get_SRAM_ELF_object_filename();
+      void'(read_elf(elf_file));
+
+      while (get_section(section_addr, section_len)) begin
+        if (section_len <= 0) begin
+          $display("ELF: ignoring empty section at 0x%0x", section_addr);
+          continue;
+        end
+
+        buffer = new[int'(section_len)];
+        for (int bi = 0; bi < buffer.size(); bi++) buffer[bi] = 8'h00;
+        void'(read_section(section_addr, buffer));
+
+        num_words = (int'(section_len) + 3) / 4;
+        for (int wi = 0; wi < num_words; wi++) begin
+          int unsigned idx = mem_word_index(section_addr + longint'(wi) * 4);
+          byte b0 = buffer[wi*4 + 0];
+          byte b1 = (wi*4 + 1 < buffer.size()) ? buffer[wi*4 + 1] : 8'h00;
+          byte b2 = (wi*4 + 2 < buffer.size()) ? buffer[wi*4 + 2] : 8'h00;
+          byte b3 = (wi*4 + 3 < buffer.size()) ? buffer[wi*4 + 3] : 8'h00;
+          if (idx < MEM_WORDS) begin
+            mem[idx] <= pack_le32(b0, b1, b2, b3);
+          end
+        end
+      end
+    end
+
+    // Taint preload (optional; defaults if SIMSRAMTAINT not set)
+    begin : preload_taints
+      string taint_file;
+      longint section_addr, section_len;
+      byte buffer[];
+      int unsigned num_words;
+
+      taint_file = Get_SRAM_TaintsPath();
+      void'(init_taint_vectors(1));
+      void'(read_taints(taint_file));
+
+      while (get_taint_section(0, section_addr, section_len)) begin
+        if (section_len <= 0) continue;
+
+        buffer = new[int'(section_len)];
+        for (int bi = 0; bi < buffer.size(); bi++) buffer[bi] = 8'h00;
+        void'(read_taint_section(0, section_addr, buffer));
+
+        num_words = (int'(section_len) + 3) / 4;
+        for (int wi = 0; wi < num_words; wi++) begin
+          int unsigned idx = mem_word_index(section_addr + longint'(wi) * 4);
+          byte b0 = buffer[wi*4 + 0];
+          byte b1 = (wi*4 + 1 < buffer.size()) ? buffer[wi*4 + 1] : 8'h00;
+          byte b2 = (wi*4 + 2 < buffer.size()) ? buffer[wi*4 + 2] : 8'h00;
+          byte b3 = (wi*4 + 3 < buffer.size()) ? buffer[wi*4 + 3] : 8'h00;
+          if (idx < MEM_WORDS) begin
+            mem_t0[idx] <= mem_t0[idx] | pack_le32(b0, b1, b2, b3);
+          end
+        end
+      end
+    end
   end
 
   // ---------------------------------------------------------------
@@ -47,22 +147,29 @@ module tb_top (
 
   logic        instr_rvalid_q;
   logic [31:0] instr_rdata_q;
+  logic [31:0] instr_rdata_t0_q;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       instr_rvalid_q <= 1'b0;
       instr_rdata_q  <= 32'h0;
+      instr_rdata_t0_q <= 32'h0;
     end else begin
       instr_rvalid_q <= instr_req & instr_gnt;
-      if (instr_req & instr_gnt)
+      if (instr_req & instr_gnt) begin
         instr_rdata_q <= mem[(instr_addr & MEM_MASK) >> 2];
-      else
+        instr_rdata_t0_q <= mem_t0[(instr_addr & MEM_MASK) >> 2];
+      end else begin
         instr_rdata_q <= 32'h0;
+        instr_rdata_t0_q <= 32'h0;
+      end
     end
   end
 
   assign instr_rvalid = instr_rvalid_q;
   assign instr_rdata  = instr_rdata_q;
+  // When using an instrumented core, connect instr_rdata_t0_q to the core's instr_rdata_i_t0.
+  // logic [31:0] instr_rdata_t0 = instr_rdata_t0_q;
 
   // ---------------------------------------------------------------
   // Data OBI responder (1-cycle grant, 1-cycle response)
@@ -75,11 +182,13 @@ module tb_top (
   logic [3:0]  data_be_q;
   logic        data_we_q;
   logic [31:0] data_wdata_q;
+  logic [31:0] data_rdata_t0_q;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       data_rvalid_q <= 1'b0;
       data_rdata_q  <= 32'h0;
+      data_rdata_t0_q <= 32'h0;
       data_addr_q   <= 32'h0;
       data_be_q     <= 4'h0;
       data_we_q     <= 1'b0;
@@ -90,15 +199,20 @@ module tb_top (
       data_be_q     <= data_be;
       data_we_q     <= data_we;
       data_wdata_q  <= data_wdata;
-      if (data_req & data_gnt)
+      if (data_req & data_gnt) begin
         data_rdata_q <= mem[(data_addr & MEM_MASK) >> 2];
-      else
+        data_rdata_t0_q <= mem_t0[(data_addr & MEM_MASK) >> 2];
+      end else begin
         data_rdata_q <= 32'h0;
+        data_rdata_t0_q <= 32'h0;
+      end
     end
   end
 
   assign data_rvalid = data_rvalid_q;
   assign data_rdata  = data_rdata_q;
+  // When using an instrumented core, connect data_rdata_t0_q to the core's data_rdata_i_t0.
+  // logic [31:0] data_rdata_t0 = data_rdata_t0_q;
 
   // Byte-enable write on response phase
   wire [31:0] data_word_addr = (data_addr_q & MEM_MASK) >> 2;
@@ -149,7 +263,7 @@ module tb_top (
     .M_EXT            (M),
     .DEBUG            (0),
     .CLIC             (0),
-    .PMP_NUM_REGIONS  (0),
+    .PMP_NUM_REGIONS  (16),
     .PMA_NUM_REGIONS  (0),
     .DBG_NUM_TRIGGERS (0),
     .LFSR0_CFG        ('{coeffs: 32'hB800_0001, default_seed: 32'h0000_0001}),

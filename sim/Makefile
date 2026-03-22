@@ -15,7 +15,16 @@ BHV_SRC   := $(BHV_DIR)/cv32e40s_sim_clock_gate.sv \
              $(BHV_DIR)/cv32e40s_sim_sffs.sv
 
 TB        := tb_top.sv
-CPP       := sim_main.cpp
+REPO_ROOT := $(abspath ../../..)
+CELLIFT_DV_DIR := $(REPO_ROOT)/cellift-meta/design-processing/common/dv
+
+# DPI helpers for ELF/taint preloading into the SV memory model.
+CELLIFT_DPI_CPP := \
+	$(CELLIFT_DV_DIR)/common_functions.cc \
+	$(CELLIFT_DV_DIR)/elfloader.cc \
+	$(CELLIFT_DV_DIR)/taintloader.cc
+
+CPP       := sim_main.cpp $(CELLIFT_DPI_CPP)
 TOP       := tb_top
 
 VFLAGS    := --cc --exe --trace --top-module $(TOP) \
