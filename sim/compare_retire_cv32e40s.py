@@ -16,6 +16,9 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+DEFAULT_PC_MIN = 0x80000428
+DEFAULT_PC_MAX = 0x80000718
+
 
 @dataclass(frozen=True)
 class RetireEvent:
