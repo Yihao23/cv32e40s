@@ -116,6 +116,7 @@ def _fmt_hex(x: int | None) -> str:
 def compare(a: list[RetireEvent], b: list[RetireEvent]) -> dict:
     n = min(len(a), len(b))
 
+    count_equal = len(a) == len(b)
     pc_equal = all(a[i].pc == b[i].pc for i in range(n))
     offs = [b[i].time - a[i].time for i in range(n)]
     uniq_offs = sorted(set(offs))
@@ -132,6 +133,7 @@ def compare(a: list[RetireEvent], b: list[RetireEvent]) -> dict:
         "n_a": len(a),
         "n_b": len(b),
         "n_cmp": n,
+        "count_equal": count_equal,
         "pc_equal": pc_equal,
         "uniq_offs": uniq_offs,
         "offs": offs,
@@ -139,23 +141,30 @@ def compare(a: list[RetireEvent], b: list[RetireEvent]) -> dict:
     }
 
 
-def load_existing_atoms(path: Path) -> list[str]:
+def filter_events_by_pc(events: list[RetireEvent], pc_min: int, pc_max: int) -> list[RetireEvent]:
+    return [ev for ev in events if ev.pc is not None and pc_min <= ev.pc <= pc_max]
+
+
+def load_atom_counts(path: Path) -> dict[str, int]:
     if not path.exists():
-        return []
+        return {}
     try:
         data = json.loads(path.read_text())
     except Exception:
-        return []
-    if not isinstance(data, list):
-        return []
-    return [x for x in data if isinstance(x, str)]
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        k: int(v)
+        for k, v in data.items()
+        if isinstance(k, str) and isinstance(v, int)
+    }
 
 
 def update_atom_file(path: Path, atom: str) -> None:
-    atoms = load_existing_atoms(path)
-    if atom not in atoms:
-        atoms.append(atom)
-    path.write_text(json.dumps(atoms, indent=2) + "\n")
+    atom_counts = load_atom_counts(path)
+    atom_counts[atom] = atom_counts.get(atom, 0) + 1
+    path.write_text(json.dumps(atom_counts, indent=2, sort_keys=True) + "\n")
 
 
 def main() -> int:
@@ -192,13 +201,16 @@ def main() -> int:
     ev_b = extract_retire_events(
         args.trace_b, clk_ref=args.clk_ref, retire_ref=args.retire_ref, pc_ref=args.pc_ref
     )
+    ev_a = filter_events_by_pc(ev_a, DEFAULT_PC_MIN, DEFAULT_PC_MAX)
+    ev_b = filter_events_by_pc(ev_b, DEFAULT_PC_MIN, DEFAULT_PC_MAX)
     res = compare(ev_a, ev_b)
 
     print(f"events: A={res['n_a']} B={res['n_b']} compared={res['n_cmp']}")
+    print(f"event_count_equal: {res['count_equal']}")
     print(f"pc_sequence_equal: {res['pc_equal']}")
     print(f"offset_unique: {res['uniq_offs']}")
 
-    naive_is_leak = res["uniq_offs"] != [0]
+    naive_is_leak = (not res["count_equal"]) or (res["uniq_offs"] != [0])
     if args.atom:
         out_dir = Path(args.out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
