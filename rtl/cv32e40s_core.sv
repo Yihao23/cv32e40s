@@ -33,7 +33,7 @@ module cv32e40s_core import cv32e40s_pkg::*;
 #(
   parameter                             LIB                                     = 0,
   parameter rv32_e                      RV32                                    = RV32I,
-  parameter b_ext_e                     B_EXT                                   = B_NONE,
+  parameter b_ext_e                     B_EXT                                   = ZBA_ZBB_ZBC_ZBS,
   parameter m_ext_e                     M_EXT                                   = M,
   parameter bit                         DEBUG                                   = 1,
   parameter logic [31:0]                DM_REGION_START                         = 32'hF0000000,
